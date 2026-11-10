@@ -701,16 +701,31 @@ $('#extractBtn').addEventListener('click', async () => {
   const label = btn.textContent;
   btn.textContent = 'Reading…';
   status.textContent = 'Sending the text to the model';
+  /* The endpoint is reliable but not consistently fast: a first call that
+     times out is usually followed by a quick one, so try twice before
+     giving up on it and handing the text to the rules parser. */
+  let got = null, lastErr = null;
+  for(let attempt = 1; attempt <= 2 && !got; attempt++){
+    try{
+      if(!navigator.onLine) throw new Error('this device is offline');
+      if(attempt > 1) status.textContent = 'First attempt timed out, trying once more';
+      got = await aiParse(text);
+    }catch(err){
+      lastErr = err;
+      if(!navigator.onLine) break;
+    }
+  }
   try{
-    if(!navigator.onLine) throw new Error('this device is offline');
-    candidates = (await aiParse(text)).map(c => ({...c, selected: true}));
-    status.textContent = 'Read by the model';
-    showCandidates('ai');
-  }catch(err){
-    candidates = runRules(text);
-    status.textContent = 'AI reading failed (' + err.message + '), used the built-in rules instead';
-    toast('AI unavailable, fell back to the rules parser');
-    showCandidates('rules');
+    if(got){
+      candidates = got.map(c => ({...c, selected: true}));
+      status.textContent = 'Read by the model';
+      showCandidates('ai');
+    } else {
+      candidates = runRules(text);
+      status.textContent = 'AI reading failed (' + (lastErr ? lastErr.message : 'unknown') + '), used the built-in rules instead';
+      toast('AI unavailable, fell back to the rules parser');
+      showCandidates('rules');
+    }
   }finally{
     btn.disabled = false; btn.textContent = label;
   }
