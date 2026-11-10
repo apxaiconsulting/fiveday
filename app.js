@@ -601,27 +601,23 @@ async function copyToClipboard(text){
   }
 }
 
-/* One task as text worth pasting into a chat: what it is, where it sits, and
-   the line it came from, which is usually the part that carries the detail. */
-function taskText(t, withHeader){
+/* Just the task's own words. The original line is used when it survived
+   with more detail than the trimmed title; otherwise the title stands. */
+function taskText(t){
+  const title = String(t.title || '').trim();
+  const src = String(t.source || '').trim();
+  const note = String(t.note || '').trim();
   const lines = [];
-  if(withHeader) lines.push('Task: ' + t.title); else lines.push(t.title);
-  const a = areaById(t.area);
-  if(a) lines.push('Area: ' + a.name);
-  if(t.due) lines.push('Due: ' + prettyDate(t.due));
-  if(t.priority && t.priority !== 'normal') lines.push('Priority: ' + t.priority);
-  if(t.date) lines.push('Scheduled: ' + prettyDate(t.date));
-  const st = t.done ? 'completed' : (t.status === 'active' ? 'in progress' : t.status);
-  lines.push('Status: ' + st);
-  if(t.note && t.note.trim()) lines.push('Note: ' + t.note.trim());
-  if(t.source && t.source.trim() && t.source.trim().toLowerCase() !== t.title.toLowerCase()){
-    lines.push('From the original message: "' + t.source.trim() + '"');
-  }
+  lines.push(src && src.length > title.length && src.toLowerCase().includes(title.slice(0, 18).toLowerCase())
+    ? src : title);
+  if(note && note.toLowerCase() !== title.toLowerCase()) lines.push(note);
   return lines.join('\n');
 }
-function tasksText(list, heading){
-  const body = list.map(t => taskText(t, true)).join('\n\n');
-  return heading ? heading + '\n\n' + body : body;
+function tasksText(list){
+  const parts = list.map(t => taskText(t));
+  /* when any task carries a second line, separate entries by a blank line so
+     a note cannot be mistaken for the next task */
+  return parts.join(parts.some(p => p.includes('\n')) ? '\n\n' : '\n');
 }
 
 let toastTimer;
@@ -888,7 +884,7 @@ function taskNode(t){
 
   const cp = el('span',{class:'tag btn-tag',title:'Copy this task, ready to paste into a chat',text:'copy'});
   cp.addEventListener('click', async () => {
-    const ok = await copyToClipboard(taskText(t, false));
+    const ok = await copyToClipboard(taskText(t));
     toast(ok ? 'Task copied' : 'Could not reach the clipboard');
   });
   tags.appendChild(cp);
@@ -944,7 +940,7 @@ function renderBoard(){
     const copyDay = el('button',{class:'col-copy',title:'Copy this day\u2019s tasks',text:'copy'});
     copyDay.addEventListener('click', async () => {
       if(!mine.length){ toast('Nothing on that day'); return; }
-      const ok = await copyToClipboard(tasksText(mine, 'Tasks for ' + prettyDate(d) + ':'));
+      const ok = await copyToClipboard(tasksText(mine));
       toast(ok ? mine.length + ' task' + (mine.length>1?'s':'') + ' copied' : 'Could not reach the clipboard');
     });
     const col = el('div',{class:'col' + (d===today?' today':'') + (d<today?' past':'')},[
