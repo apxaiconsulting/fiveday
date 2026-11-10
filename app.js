@@ -393,7 +393,10 @@ function parseText(text, includeMaybes){
  * The worker holds the API key and only answers the published origin,
  * so this never runs from localhost. Any failure falls back to rules.
  * ------------------------------------------------------------------ */
-const AI_TIMEOUT_MS = 30000;
+/* A real parse measured 26-27s against gemini-3.6-flash, so 30s left almost
+   no headroom and fell back to the rules parser on perfectly good calls. */
+const AI_TIMEOUT_MS = 60000;
+const AI_RETRY_IF_FASTER_THAN_MS = 30000;
 
 function aiSystemPrompt(){
   const today = todayISO();
@@ -705,16 +708,24 @@ $('#extractBtn').addEventListener('click', async () => {
      times out is usually followed by a quick one, so try twice before
      giving up on it and handing the text to the rules parser. */
   let got = null, lastErr = null;
+  const started = Date.now();
+  const tick = setInterval(() => {
+    status.textContent = 'Reading with the model… ' + Math.round((Date.now() - started) / 1000) + 's';
+  }, 1000);
   for(let attempt = 1; attempt <= 2 && !got; attempt++){
+    const t0 = Date.now();
     try{
       if(!navigator.onLine) throw new Error('this device is offline');
-      if(attempt > 1) status.textContent = 'First attempt timed out, trying once more';
       got = await aiParse(text);
     }catch(err){
       lastErr = err;
-      if(!navigator.onLine) break;
+      /* A fast failure is usually the model being busy, and an immediate
+         second call tends to work. A slow one has already spent the user's
+         patience, so hand over to the rules parser instead of doubling it. */
+      if(!navigator.onLine || Date.now() - t0 >= AI_RETRY_IF_FASTER_THAN_MS) break;
     }
   }
+  clearInterval(tick);
   try{
     if(got){
       candidates = got.map(c => ({...c, selected: true}));
