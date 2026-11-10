@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Fiveday</title>
+<meta name="description" content="Paste a task list or an email, split the work across five days, and generate a role-aligned EOD report.">
+<meta name="theme-color" content="#0b0f17">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="dot"></span>
+    <h1>Fiveday</h1>
+    <span class="role-chip" id="roleChip"></span>
+  </div>
+  <nav class="tabs" id="tabs">
+    <button class="tab active" data-tab="capture">Capture</button>
+    <button class="tab" data-tab="week">Week</button>
+    <button class="tab" data-tab="eod">EOD</button>
+    <button class="tab" data-tab="settings">Settings</button>
+  </nav>
+</header>
+
+<main>
+  <!-- ============ CAPTURE ============ -->
+  <section class="panel active" id="panel-capture">
+    <div class="card">
+      <div class="card-head">
+        <h2>Paste anything</h2>
+        <p class="hint">An email body, a Slack message, a meeting note, a bare list. Fiveday pulls out the action items, guesses the responsibility area, and picks up dates like "by Friday" or "EOD".</p>
+      </div>
+      <textarea id="rawInput" rows="10" placeholder="Paste the email or message here…"></textarea>
+      <div class="row gap wrap">
+        <button class="btn primary" id="extractBtn">Extract tasks</button>
+        <button class="btn ghost" id="clearRawBtn">Clear</button>
+        <label class="check inline"><input type="checkbox" id="includeMaybes"> Show low-confidence lines too</label>
+      </div>
+    </div>
+
+    <div class="card" id="candidatesCard" hidden>
+      <div class="card-head row between">
+        <h2>Found <span id="candCount">0</span></h2>
+        <div class="row gap">
+          <button class="btn ghost sm" id="selectAllBtn">Select all</button>
+          <button class="btn ghost sm" id="selectNoneBtn">None</button>
+        </div>
+      </div>
+      <div id="candidates" class="cand-list"></div>
+      <div class="row gap wrap sticky-actions">
+        <label class="field sm">
+          <span>Add to</span>
+          <select id="candDay"></select>
+        </label>
+        <button class="btn primary" id="addSelectedBtn">Add selected</button>
+        <span class="hint" id="addHint"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Add one by hand</h2>
+      </div>
+      <div class="row gap wrap">
+        <input type="text" id="manualTitle" placeholder="Task" class="grow">
+        <select id="manualArea"></select>
+        <select id="manualDay"></select>
+        <button class="btn" id="manualAddBtn">Add</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ WEEK ============ -->
+  <section class="panel" id="panel-week">
+    <div class="weekbar">
+      <div class="row gap center">
+        <button class="btn ghost sm" id="prevWeek">&larr;</button>
+        <strong id="weekLabel"></strong>
+        <button class="btn ghost sm" id="nextWeek">&rarr;</button>
+        <button class="btn ghost sm" id="thisWeek">This week</button>
+      </div>
+      <div class="row gap center wrap">
+        <span class="hint" id="weekStats"></span>
+        <button class="btn sm" id="autoSplitBtn">Auto-split backlog</button>
+        <button class="btn ghost sm" id="rolloverBtn">Roll unfinished to today</button>
+      </div>
+    </div>
+    <div class="board" id="board"></div>
+    <div class="card backlog-card">
+      <div class="card-head row between">
+        <h2>Backlog <span class="count" id="backlogCount">0</span></h2>
+        <span class="hint">Unscheduled. Drag onto a day, or use Auto-split.</span>
+      </div>
+      <div class="col-body dropzone" id="backlog" data-date=""></div>
+    </div>
+  </section>
+
+  <!-- ============ EOD ============ -->
+  <section class="panel" id="panel-eod">
+    <div class="card">
+      <div class="card-head row between wrap">
+        <h2>End of day</h2>
+        <label class="field sm"><span>Date</span><input type="date" id="eodDate"></label>
+      </div>
+      <div class="grid-metrics" id="metricsGrid"></div>
+      <label class="field">
+        <span>Blockers, risks, or anything waiting on someone else</span>
+        <textarea id="eodBlockers" rows="2" placeholder="Optional. Left blank it is left out."></textarea>
+      </label>
+      <label class="field">
+        <span>Proposed improvements you want on the record</span>
+        <textarea id="eodProposals" rows="2" placeholder="Optional. One per line."></textarea>
+      </label>
+      <div class="row gap wrap">
+        <button class="btn primary" id="genEodBtn">Generate report</button>
+        <button class="btn ghost" id="copyEodBtn">Copy</button>
+        <label class="check inline"><input type="checkbox" id="eodHeadings" checked> Use area lead-ins</label>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head row between">
+        <h2>Report</h2>
+        <span class="hint">Editable. Nothing here is invented, it is built from your tasks and numbers.</span>
+      </div>
+      <textarea id="eodOut" rows="22" class="mono"></textarea>
+    </div>
+  </section>
+
+  <!-- ============ SETTINGS ============ -->
+  <section class="panel" id="panel-settings">
+    <div class="card">
+      <div class="card-head"><h2>Role framing</h2>
+      <p class="hint">Every EOD report is written around this. Edit it as the role evolves.</p></div>
+      <div class="row gap wrap">
+        <label class="field grow"><span>Role title</span><input type="text" id="roleTitle"></label>
+        <label class="field"><span>Organization</span><input type="text" id="roleOrg"></label>
+      </div>
+      <label class="field"><span>Objective vocabulary (comma separated)</span><input type="text" id="roleObjectives"></label>
+    </div>
+    <div class="card">
+      <div class="card-head row between"><h2>Responsibility areas</h2>
+        <button class="btn ghost sm" id="addAreaBtn">Add area</button></div>
+      <p class="hint">Keywords decide which area a pasted task lands in, and the lead-in is how that area opens its paragraph in the report.</p>
+      <div id="areaList" class="area-list"></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Planning</h2></div>
+      <div class="row gap wrap">
+        <label class="field"><span>Tasks per day target</span><input type="number" id="capacity" min="1" max="30" step="1"></label>
+        <label class="field"><span>Week starts on</span>
+          <select id="weekStartDow"><option value="1">Monday</option><option value="0">Sunday</option></select>
+        </label>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Data</h2></div>
+      <div class="row gap wrap">
+        <button class="btn ghost" id="exportBtn">Export JSON</button>
+        <label class="btn ghost file">Import JSON<input type="file" id="importFile" accept="application/json" hidden></label>
+        <button class="btn ghost" id="clearDoneBtn">Delete completed older than 30 days</button>
+        <button class="btn danger ghost" id="wipeBtn">Erase everything</button>
+      </div>
+      <p class="hint">Everything lives in this browser only. Nothing is sent anywhere.</p>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>
