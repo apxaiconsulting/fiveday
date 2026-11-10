@@ -121,13 +121,14 @@
       <div class="row gap wrap">
         <button class="btn primary" id="genEodBtn">Generate report</button>
         <button class="btn ghost" id="copyEodBtn">Copy</button>
+        <label class="check inline"><input type="checkbox" id="eodSummaryOnly" checked> Summary only</label>
         <label class="check inline"><input type="checkbox" id="eodHeadings" checked> Use area lead-ins</label>
       </div>
     </div>
     <div class="card">
       <div class="card-head row between">
         <h2>Report</h2>
-        <span class="hint">Editable. Nothing here is invented, it is built from your tasks and numbers.</span>
+        <span class="hint">Editable. Type anything you want above it and regenerating will keep your text.</span>
       </div>
       <textarea id="eodOut" rows="22" class="mono"></textarea>
     </div>

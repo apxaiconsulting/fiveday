@@ -100,6 +100,10 @@ input[type=checkbox]{accent-color:var(--accent2);width:16px;height:16px}
 .col-head .dow{font-weight:650;font-size:13px}
 .col-head .dnum{font-size:11.5px;color:var(--mut)}
 .col-head .load{font-size:11px;color:var(--dim)}
+.col-head-right{display:flex;align-items:center;gap:6px}
+.col-copy{background:transparent;border:1px solid var(--line2);color:var(--dim);border-radius:999px;
+  font-size:10.5px;padding:1px 7px;cursor:pointer;line-height:1.6}
+.col-copy:hover{color:var(--text);border-color:var(--dim)}
 .col-body{padding:8px;display:flex;flex-direction:column;gap:7px;flex:1}
 .dropzone.over{background:rgba(91,140,255,.1);outline:2px dashed var(--accent);outline-offset:-4px;border-radius:8px}
 .backlog-card .col-body{min-height:70px;display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:7px}

@@ -583,6 +583,44 @@ function el(tag, props={}, kids=[]){
   for(const kid of [].concat(kids)) if(kid) n.appendChild(kid);
   return n;
 }
+async function copyToClipboard(text){
+  try{ await navigator.clipboard.writeText(text); return true; }
+  catch(e){
+    /* clipboard API needs a secure context and a user gesture; fall back */
+    try{
+      const ta = el('textarea',{});
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;top:-1000px;opacity:0';
+      document.body.appendChild(ta); ta.select();
+      const ok = document.execCommand('copy');
+      ta.remove(); return ok;
+    }catch(e2){ return false; }
+  }
+}
+
+/* One task as text worth pasting into a chat: what it is, where it sits, and
+   the line it came from, which is usually the part that carries the detail. */
+function taskText(t, withHeader){
+  const lines = [];
+  if(withHeader) lines.push('Task: ' + t.title); else lines.push(t.title);
+  const a = areaById(t.area);
+  if(a) lines.push('Area: ' + a.name);
+  if(t.due) lines.push('Due: ' + prettyDate(t.due));
+  if(t.priority && t.priority !== 'normal') lines.push('Priority: ' + t.priority);
+  if(t.date) lines.push('Scheduled: ' + prettyDate(t.date));
+  const st = t.done ? 'completed' : (t.status === 'active' ? 'in progress' : t.status);
+  lines.push('Status: ' + st);
+  if(t.note && t.note.trim()) lines.push('Note: ' + t.note.trim());
+  if(t.source && t.source.trim() && t.source.trim().toLowerCase() !== t.title.toLowerCase()){
+    lines.push('From the original message: "' + t.source.trim() + '"');
+  }
+  return lines.join('\n');
+}
+function tasksText(list, heading){
+  const body = list.map(t => taskText(t, true)).join('\n\n');
+  return heading ? heading + '\n\n' + body : body;
+}
+
 let toastTimer;
 function toast(msg){
   const t = $('#toast');
@@ -845,6 +883,13 @@ function taskNode(t){
   mv.addEventListener('pointerdown', e => e.stopPropagation());
   tags.appendChild(mv);
 
+  const cp = el('span',{class:'tag btn-tag',title:'Copy this task, ready to paste into a chat',text:'copy'});
+  cp.addEventListener('click', async () => {
+    const ok = await copyToClipboard(taskText(t, false));
+    toast(ok ? 'Task copied' : 'Could not reach the clipboard');
+  });
+  tags.appendChild(cp);
+
   const x = el('button',{class:'t-x',title:'Delete',text:'×'});
   x.addEventListener('click', () => {
     S.tasks = S.tasks.filter(o => o.id !== t.id); save(); renderBoard();
@@ -893,13 +938,22 @@ function renderBoard(){
     const body = el('div',{class:'col-body dropzone','data-date':d});
     mine.forEach(t => body.appendChild(taskNode(t)));
     wireDrop(body);
+    const copyDay = el('button',{class:'col-copy',title:'Copy this day\u2019s tasks',text:'copy'});
+    copyDay.addEventListener('click', async () => {
+      if(!mine.length){ toast('Nothing on that day'); return; }
+      const ok = await copyToClipboard(tasksText(mine, 'Tasks for ' + prettyDate(d) + ':'));
+      toast(ok ? mine.length + ' task' + (mine.length>1?'s':'') + ' copied' : 'Could not reach the clipboard');
+    });
     const col = el('div',{class:'col' + (d===today?' today':'') + (d<today?' past':'')},[
       el('div',{class:'col-head'},[
         el('div',{},[
           el('div',{class:'dow',text:DOW_SHORT[dd.getDay()]}),
           el('div',{class:'dnum',text:shortDate(d)}),
         ]),
-        el('div',{class:'load',text: mine.length ? (mine.length - openCount) + '/' + mine.length : '—'}),
+        el('div',{class:'col-head-right'},[
+          el('span',{class:'load',text: mine.length ? (mine.length - openCount) + '/' + mine.length : '—'}),
+          copyDay,
+        ]),
       ]),
       body,
     ]);
@@ -1046,12 +1100,15 @@ function sentenceFromTasks(list, lead){
 function buildEod(){
   const d = $('#eodDate').value || todayISO();
   const useLeads = $('#eodHeadings').checked;
+  const summaryOnly = $('#eodSummaryOnly').checked;
   const role = S.role;
   const out = [];
 
-  out.push('EOD Report — ' + prettyDate(d));
-  out.push(role.title + (role.org ? ', ' + role.org : ''));
-  out.push('');
+  if(!summaryOnly){
+    out.push('EOD Report — ' + prettyDate(d));
+    out.push(role.title + (role.org ? ', ' + role.org : ''));
+    out.push('');
+  }
 
   /* completed */
   const completed = doneOn(d);
@@ -1072,6 +1129,10 @@ function buildEod(){
   } else {
     out.push('No tasks were closed out today.');
   }
+
+  /* Summary only stops here: just the prose, nothing appended. Everything
+     below is the full report's extra sections. */
+  if(summaryOnly) return out.join('\n').trim();
 
   /* metrics */
   const m = metricsFor(d);
@@ -1136,14 +1197,28 @@ function lowerFirst(s){
   return s[0].toLowerCase() + s.slice(1);
 }
 
-$('#genEodBtn').addEventListener('click', () => { $('#eodOut').value = buildEod(); toast('Report generated'); });
+let lastGenerated = '';
+function putReport(){
+  const box = $('#eodOut');
+  const report = buildEod();
+  const cur = box.value;
+  let kept = '';
+  if(cur.trim()){
+    /* strip the previous generated block, keep whatever the user wrote */
+    kept = (lastGenerated && cur.includes(lastGenerated) ? cur.replace(lastGenerated, '') : cur).trim();
+  }
+  box.value = kept ? kept + '\n\n' + report : report;
+  lastGenerated = report;
+  return box.value;
+}
+$('#genEodBtn').addEventListener('click', () => { putReport(); toast('Report generated'); });
+$('#eodSummaryOnly').addEventListener('change', () => { if($('#eodOut').value) putReport(); });
 $('#copyEodBtn').addEventListener('click', async () => {
-  const v = $('#eodOut').value || buildEod();
-  $('#eodOut').value = v;
-  try{ await navigator.clipboard.writeText(v); toast('Copied'); }
-  catch(e){ $('#eodOut').select(); toast('Press Cmd+C to copy'); }
+  const v = $('#eodOut').value || putReport();
+  const ok = await copyToClipboard(v);
+  if(ok) toast('Copied'); else { $('#eodOut').select(); toast('Press Cmd+C to copy'); }
 });
-$('#eodHeadings').addEventListener('change', () => { if($('#eodOut').value) $('#eodOut').value = buildEod(); });
+$('#eodHeadings').addEventListener('change', () => { if($('#eodOut').value) putReport(); });
 
 /* ------------------------------------------------------------------ *
  * Settings
