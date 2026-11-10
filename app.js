@@ -452,7 +452,10 @@ async function aiParse(text){
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: aiSystemPrompt() }] },
         contents: [{ role:'user', parts:[{ text: String(text).slice(0, 60000) }] }],
-        generationConfig: { responseMimeType:'application/json', maxOutputTokens: 8192 },
+        /* A task list is small: roughly 60 tokens per task, so even a long
+           email lands well under 4096. Asking for 8192 only made the model
+           slower without ever being used. */
+        generationConfig: { responseMimeType:'application/json', maxOutputTokens: 4096 },
       }),
     });
   } catch(e){
