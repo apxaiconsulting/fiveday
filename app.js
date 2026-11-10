@@ -52,6 +52,7 @@ const DEFAULT_STATE = {
   },
   capacity: 6,
   weekStartDow: 1,
+  ai: { enabled: true, endpoint: 'https://studyforge-api.apx-jqnn.workers.dev' },
   weekStart: null,        // set on first load
 };
 
@@ -67,6 +68,7 @@ function load(){
     const p = JSON.parse(raw);
     const s = {...structuredClone(DEFAULT_STATE), ...p};
     s.role = {...DEFAULT_STATE.role, ...(p.role||{})};
+    s.ai = {...DEFAULT_STATE.ai, ...(p.ai||{})};
     if(!Array.isArray(s.role.areas) || !s.role.areas.length) s.role.areas = DEFAULT_AREAS.map(a=>({...a}));
     s.tasks = Array.isArray(s.tasks) ? s.tasks.map(normTask) : [];
     s.metrics = s.metrics || {}; s.notes = s.notes || {};
@@ -363,6 +365,114 @@ function parseText(text, includeMaybes){
 }
 
 /* ------------------------------------------------------------------ *
+ * AI reading — Gemini through the shared Cloudflare Worker.
+ * The worker holds the API key and only answers the published origin,
+ * so this never runs from localhost. Any failure falls back to rules.
+ * ------------------------------------------------------------------ */
+const AI_TIMEOUT_MS = 30000;
+
+function aiSystemPrompt(){
+  const today = todayISO();
+  const areas = S.role.areas
+    .map(a => '  ' + a.id + ' = ' + a.name + (a.keywords ? '  (typical subjects: ' + a.keywords + ')' : ''))
+    .join('\n');
+  return [
+    'You turn pasted workplace text into a task list for one person. You do not do the tasks.',
+    '',
+    'Today is ' + today + ', a ' + DOW_LONG[fromISO(today).getDay()] + '. Resolve every relative date against that.',
+    '',
+    'Return ONLY a JSON object of the form {"tasks": [ ... ]}. Each task has these keys:',
+    '  title     short imperative instruction, under 120 characters, no trailing period,',
+    '            no "please", no urgency words, no name of whoever asked',
+    '  source    the exact sentence or line from the input that the task came from',
+    '  area      one of the area ids below, or null if none clearly fits',
+    '  due       "YYYY-MM-DD", or null when the text states no deadline',
+    '  priority  "high", "normal" or "low"',
+    '  note      a short detail worth keeping that does not belong in the title, else ""',
+    '',
+    'Area ids:',
+    areas || '  (none configured)',
+    '',
+    'Rules:',
+    '- Include only things that someone actually has to do. Skip greetings, sign-offs, thanks,',
+    '  FYI statements, announcements, and status updates that ask for nothing.',
+    '- Split a sentence that contains two separate actions into two tasks.',
+    '- Never invent a task, a number, a deadline or a detail that is not in the text.',
+    '- Keep names, counts, counties, file names and system names exactly as written.',
+    '- A date only counts as a deadline when the text sets one. "since Thursday" and',
+    '  "we met Monday" are references to the past, not due dates.',
+    '- priority is "high" only for stated urgency (urgent, ASAP, critical, today),',
+    '  and "low" for stated slack (no rush, low priority, whenever, nice to have).',
+    '- If the text contains no tasks at all, return {"tasks": []}.',
+  ].join('\n');
+}
+
+function stripFence(t){
+  return String(t||'').trim().replace(/^```(?:json)?\s*/i,'').replace(/```\s*$/,'').trim();
+}
+
+async function aiParse(text){
+  const endpoint = (S.ai.endpoint||'').trim();
+  if(!endpoint) throw new Error('No endpoint set');
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), AI_TIMEOUT_MS);
+  let res;
+  try{
+    res = await fetch(endpoint, {
+      method:'POST',
+      headers:{'content-type':'application/json'},
+      signal: ctrl.signal,
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: aiSystemPrompt() }] },
+        contents: [{ role:'user', parts:[{ text: String(text).slice(0, 60000) }] }],
+        generationConfig: { responseMimeType:'application/json', maxOutputTokens: 8192 },
+      }),
+    });
+  } catch(e){
+    throw new Error(e.name === 'AbortError' ? 'the model took too long' : 'the request could not be sent');
+  } finally { clearTimeout(timer); }
+
+  if(!res.ok){
+    let msg = 'HTTP ' + res.status;
+    try{ const j = await res.json(); if(j?.error?.message) msg = j.error.message; }catch(e){}
+    throw new Error(msg);
+  }
+  const data = await res.json();
+  const raw = (data?.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
+  if(!raw.trim()) throw new Error('the model returned nothing');
+  let parsed;
+  try{ parsed = JSON.parse(stripFence(raw)); }
+  catch(e){ throw new Error('the model did not return usable JSON'); }
+
+  const list = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.tasks) ? parsed.tasks : null);
+  if(!list) throw new Error('the model did not return a task list');
+
+  /* Everything below treats the model output as untrusted data: unknown
+     areas, bad dates and stray keys are dropped rather than stored. */
+  const ids = new Set(S.role.areas.map(a => a.id));
+  const seen = new Set();
+  const out = [];
+  for(const r of list){
+    if(!r || typeof r !== 'object') continue;
+    let title = cleanTitle(String(r.title||'').replace(/\s+/g,' ').trim());
+    if(!title || title.split(/\s+/).length < 2) continue;
+    const key = title.toLowerCase().replace(/[^a-z0-9]/g,'');
+    if(seen.has(key)) continue;
+    seen.add(key);
+    const due = (typeof r.due === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(r.due) && !isNaN(fromISO(r.due))) ? r.due : null;
+    const priority = ['high','normal','low'].includes(r.priority) ? r.priority : 'normal';
+    const area = (typeof r.area === 'string' && ids.has(r.area)) ? r.area : (detectArea(title) || null);
+    out.push({
+      id: uid(), title, area, due, priority,
+      note: typeof r.note === 'string' ? r.note.slice(0,300) : '',
+      source: typeof r.source === 'string' ? r.source.slice(0,200) : '',
+      confident: true, score: 99, via: 'ai',
+    });
+  }
+  return out;
+}
+
+/* ------------------------------------------------------------------ *
  * Past tense — so "Update the CRM" reads as "updated the CRM"
  * ------------------------------------------------------------------ */
 const IRREGULAR = {
@@ -529,20 +639,63 @@ function renderCandidates(){
       titleIn, meta,
       c.source && c.source.toLowerCase() !== c.title.toLowerCase()
         ? el('div',{class:'src',text:'“' + c.source + '”'}) : null,
+      c.note ? el('div',{class:'src',text:'note: ' + c.note}) : null,
     ]);
     wrap.appendChild(el('div',{class:'cand' + (c.confident ? '' : ' maybe')},[cb, main]));
   });
 }
 
-$('#extractBtn').addEventListener('click', () => {
-  const text = $('#rawInput').value;
-  if(!text.trim()){ toast('Nothing pasted yet'); return; }
-  candidates = parseText(text, $('#includeMaybes').checked).map(c => ({...c, selected: c.confident}));
-  if(!candidates.length){ $('#candidatesCard').hidden = true; toast('No action items found. Try the low-confidence box.'); return; }
+function runRules(text){
+  return parseText(text, $('#includeMaybes').checked).map(c => ({...c, selected: c.confident, via:'rules'}));
+}
+function showCandidates(how){
+  if(!candidates.length){
+    $('#candidatesCard').hidden = true;
+    toast(how === 'ai' ? 'The model found no action items in that text'
+                       : 'No action items found. Try the low-confidence box.');
+    return;
+  }
   renderCandidates();
-  const n = candidates.filter(c=>c.selected).length;
+  const n = candidates.filter(c => c.selected).length;
   $('#addHint').textContent = n + ' of ' + candidates.length + ' pre-selected';
   dayOptions($('#candDay'));
+}
+$('#extractBtn').addEventListener('click', async () => {
+  const text = $('#rawInput').value;
+  if(!text.trim()){ toast('Nothing pasted yet'); return; }
+  const btn = $('#extractBtn');
+  const status = $('#parseStatus');
+
+  if(!$('#useAI').checked){
+    status.textContent = '';
+    candidates = runRules(text);
+    showCandidates('rules');
+    return;
+  }
+
+  btn.disabled = true;
+  const label = btn.textContent;
+  btn.textContent = 'Reading…';
+  status.textContent = 'Sending the text to the model';
+  try{
+    if(!navigator.onLine) throw new Error('this device is offline');
+    candidates = (await aiParse(text)).map(c => ({...c, selected: true}));
+    status.textContent = 'Read by the model';
+    showCandidates('ai');
+  }catch(err){
+    candidates = runRules(text);
+    status.textContent = 'AI reading failed (' + err.message + '), used the built-in rules instead';
+    toast('AI unavailable, fell back to the rules parser');
+    showCandidates('rules');
+  }finally{
+    btn.disabled = false; btn.textContent = label;
+  }
+});
+$('#useAI').addEventListener('change', e => {
+  S.ai.enabled = e.target.checked; save();
+  $('#maybesWrap').hidden = e.target.checked;
+  $('#parseStatus').textContent = '';
+  const box = $('#aiEnabled'); if(box) box.checked = e.target.checked;
 });
 $('#clearRawBtn').addEventListener('click', () => {
   $('#rawInput').value = ''; candidates = []; $('#candidatesCard').hidden = true;
@@ -555,7 +708,7 @@ $('#addSelectedBtn').addEventListener('click', () => {
   if(!picked.length){ toast('Nothing selected'); return; }
   const target = $('#candDay').value;
   const added = picked.map(c => normTask({
-    title: c.title.trim(), area: c.area, due: c.due, priority: c.priority, source: c.source,
+    title: c.title.trim(), area: c.area, due: c.due, priority: c.priority, source: c.source, note: c.note || '',
     date: (target && target !== '__auto') ? target : null,
   }));
   S.tasks.push(...added);
@@ -951,6 +1104,8 @@ function renderSettings(){
   $('#roleObjectives').value = S.role.objectives || '';
   $('#capacity').value = S.capacity;
   $('#weekStartDow').value = String(S.weekStartDow);
+  $('#aiEnabled').checked = !!S.ai.enabled;
+  $('#aiEndpoint').value = S.ai.endpoint || '';
 
   const list = $('#areaList');
   list.innerHTML = '';
@@ -982,6 +1137,24 @@ $('#weekStartDow').addEventListener('change', e => {
   S.weekStartDow = Number(e.target.value);
   S.weekStart = weekStartOf(todayISO(), S.weekStartDow);
   save(); renderBoard();
+});
+$('#aiEnabled').addEventListener('change', e => {
+  S.ai.enabled = e.target.checked; save();
+  $('#useAI').checked = e.target.checked;
+  $('#maybesWrap').hidden = e.target.checked;
+});
+$('#aiEndpoint').addEventListener('input', e => { S.ai.endpoint = e.target.value.trim(); save(); });
+$('#aiTestBtn').addEventListener('click', async () => {
+  const out = $('#aiTestOut');
+  out.textContent = 'Testing…';
+  try{
+    const got = await aiParse('Action items: please pull the Nueces delinquent roll by Friday, and fix the broken DIBS export.');
+    out.textContent = got.length
+      ? 'Working. The model read ' + got.length + ' task' + (got.length>1?'s':'') + ' from the test text.'
+      : 'Reached the model, but it found no tasks in the test text.';
+  }catch(err){
+    out.textContent = 'Not working: ' + err.message + '. Pasting still works, it just uses the built-in rules.';
+  }
 });
 $('#addAreaBtn').addEventListener('click', () => {
   S.role.areas.push({id:uid(),name:'New area',lead:'On this area, I',keywords:''});
@@ -1033,6 +1206,8 @@ function init(){
   const cur = weekStartOf(todayISO(), S.weekStartDow);
   if(S.weekStart < cur) S.weekStart = cur;
   refreshChrome();
+  $('#useAI').checked = !!S.ai.enabled;
+  $('#maybesWrap').hidden = !!S.ai.enabled;
   dayOptions($('#candDay')); dayOptions($('#manualDay'));
   renderBoard(); renderEod(); renderSettings();
   save();

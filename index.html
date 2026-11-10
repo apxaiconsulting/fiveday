@@ -38,7 +38,9 @@
       <div class="row gap wrap">
         <button class="btn primary" id="extractBtn">Extract tasks</button>
         <button class="btn ghost" id="clearRawBtn">Clear</button>
-        <label class="check inline"><input type="checkbox" id="includeMaybes"> Show low-confidence lines too</label>
+        <label class="check inline"><input type="checkbox" id="useAI"> Read with AI</label>
+        <label class="check inline" id="maybesWrap"><input type="checkbox" id="includeMaybes"> Show low-confidence lines too</label>
+        <span class="hint" id="parseStatus"></span>
       </div>
     </div>
 
@@ -154,6 +156,16 @@
         <label class="field"><span>Week starts on</span>
           <select id="weekStartDow"><option value="1">Monday</option><option value="0">Sunday</option></select>
         </label>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>AI reading</h2>
+      <p class="hint">With this on, pasted text is read by Gemini through the same Cloudflare Worker your other apps use, which keeps the API key off this page. If the call fails or times out, Fiveday falls back to the built-in rules and tells you. The worker only accepts requests from apxaiconsulting.github.io, so AI reading is unavailable when you open the app from a local file or localhost.</p></div>
+      <label class="check inline"><input type="checkbox" id="aiEnabled"> Use AI to read pasted text</label>
+      <label class="field"><span>Endpoint</span><input type="text" id="aiEndpoint" placeholder="https://example.workers.dev"></label>
+      <div class="row gap wrap">
+        <button class="btn ghost" id="aiTestBtn">Test connection</button>
+        <span class="hint" id="aiTestOut"></span>
       </div>
     </div>
     <div class="card">
