@@ -1,5 +1,5 @@
 /* Bump VERSION on every deploy so clients pick up the new files. */
-const VERSION = 'fiveday-v3';
+const VERSION = 'fiveday-v4';
 const ASSETS = ['./','./index.html','./styles.css','./app.js','./manifest.webmanifest','./icon.svg'];
 
 self.addEventListener('install', e => {

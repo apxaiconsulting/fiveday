@@ -52,6 +52,7 @@ const DEFAULT_STATE = {
   },
   capacity: 6,
   weekStartDow: 1,
+  tz: 'America/Chicago',   // the workday that matters is Central, not the device clock
   ai: { enabled: true, endpoint: 'https://studyforge-api.apx-jqnn.workers.dev' },
   weekStart: null,        // set on first load
 };
@@ -115,7 +116,30 @@ function iso(d){
   return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
 }
 function fromISO(s){ const [y,m,d] = s.split('-').map(Number); return new Date(y, m-1, d); }
-function todayISO(){ return iso(new Date()); }
+
+/* Dates below the day level are always read in the working timezone, not the
+   device's. On a Manila laptop working Central hours the two disagree for most
+   of the day, which would otherwise put tasks and EOD entries on the wrong day. */
+function activeTz(){
+  if(!S || !S.tz || S.tz === 'device') return Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return S.tz;
+}
+function tzISO(d){
+  const when = d || new Date();
+  try{
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: activeTz(), year:'numeric', month:'2-digit', day:'2-digit',
+    }).format(when);
+  }catch(e){ return iso(when); }
+}
+function tzLabel(){
+  const tz = activeTz();
+  try{
+    const parts = new Intl.DateTimeFormat('en-US',{timeZone:tz,timeZoneName:'short'}).formatToParts(new Date());
+    return (parts.find(p => p.type === 'timeZoneName') || {}).value || tz;
+  }catch(e){ return tz; }
+}
+function todayISO(){ return tzISO(); }
 function addDays(isoStr, n){ const d = fromISO(isoStr); d.setDate(d.getDate()+n); return iso(d); }
 function weekStartOf(isoStr, dow){
   const d = fromISO(isoStr);
@@ -973,7 +997,7 @@ $('#eodBlockers').addEventListener('input', e => { notesFor($('#eodDate').value)
 $('#eodProposals').addEventListener('input', e => { notesFor($('#eodDate').value).proposals = e.target.value; save(); });
 
 function doneOn(d){
-  return S.tasks.filter(t => t.done && (t.doneAt ? t.doneAt.slice(0,10) === d : t.date === d));
+  return S.tasks.filter(t => t.done && (t.doneAt ? tzISO(new Date(t.doneAt)) === d : t.date === d));
 }
 function groupByArea(list){
   const map = new Map();
@@ -1104,6 +1128,7 @@ function renderSettings(){
   $('#roleObjectives').value = S.role.objectives || '';
   $('#capacity').value = S.capacity;
   $('#weekStartDow').value = String(S.weekStartDow);
+  $('#tzSelect').value = S.tz || 'America/Chicago';
   $('#aiEnabled').checked = !!S.ai.enabled;
   $('#aiEndpoint').value = S.ai.endpoint || '';
 
@@ -1133,6 +1158,12 @@ $('#roleTitle').addEventListener('input', e => { S.role.title = e.target.value; 
 $('#roleOrg').addEventListener('input', e => { S.role.org = e.target.value; save(); refreshChrome(); });
 $('#roleObjectives').addEventListener('input', e => { S.role.objectives = e.target.value; save(); });
 $('#capacity').addEventListener('input', e => { S.capacity = Math.max(1, Number(e.target.value)||6); save(); });
+$('#tzSelect').addEventListener('change', e => {
+  S.tz = e.target.value;
+  S.weekStart = weekStartOf(todayISO(), S.weekStartDow);
+  save(); refreshChrome(); renderBoard(); renderEod();
+  toast('Dates now read in ' + tzLabel());
+});
 $('#weekStartDow').addEventListener('change', e => {
   S.weekStartDow = Number(e.target.value);
   S.weekStart = weekStartOf(todayISO(), S.weekStartDow);
@@ -1182,7 +1213,7 @@ $('#importFile').addEventListener('change', async e => {
 $('#clearDoneBtn').addEventListener('click', () => {
   const cut = addDays(todayISO(), -30);
   const before = S.tasks.length;
-  S.tasks = S.tasks.filter(t => !(t.done && (t.doneAt||'').slice(0,10) < cut));
+  S.tasks = S.tasks.filter(t => !(t.done && t.doneAt && tzISO(new Date(t.doneAt)) < cut));
   save(); renderBoard();
   toast((before - S.tasks.length) + ' removed');
 });
@@ -1198,6 +1229,8 @@ $('#wipeBtn').addEventListener('click', () => {
  * ------------------------------------------------------------------ */
 function refreshChrome(){
   $('#roleChip').textContent = S.role.title + (S.role.org ? ' · ' + S.role.org : '');
+  const d = fromISO(todayISO());
+  $('#todayChip').textContent = DOW_SHORT[d.getDay()] + ' ' + shortDate(todayISO()) + ' · ' + tzLabel();
   areaOptions($('#manualArea'), '');
 }
 function init(){
